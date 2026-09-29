@@ -1,0 +1,126 @@
+# name: test/sql/os.test
+# description: os_* tables against the machine running the tests. Assertions only use facts true on any macOS or Linux host.
+# group: [os]
+
+statement error
+SELECT * FROM os_processes();
+----
+Catalog Error: Table Function with name os_processes does not exist!
+
+require os
+
+# ---- self-description ----
+
+query II
+SELECT function, count(*) FILTER (kind = 'column') FROM os_describe() WHERE kind IN ('function', 'column') GROUP BY ALL ORDER BY 1;
+----
+os_describe	5
+os_disks	8
+os_interfaces	8
+os_process_env	4
+os_processes	16
+os_sockets	8
+os_system	16
+os_users	4
+
+query III
+SELECT kind, name, type FROM os_describe() WHERE function IS NULL OR kind = 'named_parameter' ORDER BY name;
+----
+setting	os_redact	BOOLEAN
+named_parameter	pid	BIGINT
+
+query I
+SELECT count(*) FROM os_describe() WHERE description IS NULL OR description = '';
+----
+0
+
+# ---- os_system ----
+
+query IIII
+SELECT count(*), bool_and(hostname IS NOT NULL), bool_and(cpus > 0), bool_and(boot_time < now()::TIMESTAMP) FROM os_system();
+----
+1	true	true	true
+
+# ---- os_processes ----
+
+# pid 1 is init/systemd/launchd, or the entrypoint in a container
+query II
+SELECT count(*) FILTER (pid = 1), count(*) > 0 FROM os_processes();
+----
+1	true
+
+query I
+SELECT count(*) - count(DISTINCT pid) FROM os_processes();
+----
+0
+
+query I
+SELECT count(*) FROM os_processes() WHERE start_time > now()::TIMESTAMP + INTERVAL 1 MINUTE OR rss_bytes > virtual_bytes AND virtual_bytes > 0;
+----
+0
+
+# cmdline and args agree
+query I
+SELECT count(*) FROM os_processes() WHERE cmdline IS DISTINCT FROM array_to_string(args, ' ');
+----
+0
+
+# ---- redaction setting ----
+
+query I
+SELECT current_setting('os_redact');
+----
+true
+
+statement ok
+SET os_redact = false;
+
+statement ok
+SET os_redact = true;
+
+statement error
+SELECT * FROM os_process_env(pid := -1);
+----
+invalid pid -1
+
+query I
+SELECT count(*) FROM os_process_env(pid := 1) WHERE pid <> 1;
+----
+0
+
+# ---- os_sockets ----
+
+query I
+SELECT count(*) FROM os_sockets()
+WHERE protocol NOT IN ('tcp', 'udp') OR family NOT IN ('ipv4', 'ipv6')
+   OR (protocol = 'udp') <> (state IS NULL) OR local_port NOT BETWEEN 0 AND 65535;
+----
+0
+
+# ---- os_users, os_disks, os_interfaces ----
+
+query I
+SELECT name FROM os_users() WHERE uid = 0;
+----
+root
+
+# sysinfo may not list a container's overlay root, so only check invariants
+query I
+SELECT count(*) FROM os_disks() WHERE available_bytes > total_bytes OR mount_point IS NULL;
+----
+0
+
+query I
+SELECT count(*) FROM os_interfaces() WHERE list_contains(addresses, '127.0.0.1/8');
+----
+1
+
+# ---- lock_configuration freezes redaction ----
+
+statement ok
+SET lock_configuration = true;
+
+statement error
+SET os_redact = false;
+----
+the configuration has been locked

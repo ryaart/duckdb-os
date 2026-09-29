@@ -1,0 +1,21 @@
+[package]
+name = "os"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+lto = true
+strip = true
+
+[dependencies]
+duckdb = { version = "~1.10505.0", features = ["loadable-extension"] }
+duckdb-tables = { git = "https://github.com/ryaart/duckdb-tables", branch = "main" }
+sysinfo = "0.38"
+netstat2 = "0.11"
+regex = "1"
+sha2 = "0.11"
